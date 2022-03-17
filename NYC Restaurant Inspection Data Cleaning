@@ -1,0 +1,264 @@
+-- For a more detailed explanation of this project, visit https://christiancoulson.io/data-cleaning-nyc-restaurant-inspections
+
+-- 1. Creating Table
+
+CREATE TABLE restaurant_inspections(
+	camis VARCHAR(255),
+	dba TEXT,
+	boro VARCHAR(255),
+	building VARCHAR(255),
+	street VARCHAR(255),
+	zipcode VARCHAR(255),
+	phone VARCHAR(255),
+	cuisine_description VARCHAR(255),
+	inspection_date VARCHAR(255),
+	action VARCHAR(255),
+	violation_code VARCHAR(255),
+	violation_description TEXT,
+	critical_flag VARCHAR(255),
+	score VARCHAR(255),
+	grade VARCHAR(255),
+	grade_date VARCHAR(255),
+	record_date VARCHAR(255),
+	inspection_type VARCHAR(255),
+	latitude VARCHAR(255),
+	longitude VARCHAR(255),
+	community_board VARCHAR(255),
+	council_district VARCHAR(255),
+	census_tract VARCHAR(255),
+	bin VARCHAR(255),
+	bbl VARCHAR(255),
+	nta VARCHAR(255)
+)
+
+---------------------------------------------------------------------------------------
+
+-- 2. Removing Unused Columns
+
+ALTER TABLE restaurant_inspections
+DROP COLUMN nta,
+DROP COLUMN bbl,
+DROP COLUMN bin,
+DROP COLUMN census_tract,
+DROP COLUMN council_district,
+DROP COLUMN community_board;
+
+--------------------------------------------------------------------------------------
+
+-- 3. Standardizing Names With REGEX
+
+-- 3.1 Capitalizing the first letter of every word
+
+UPDATE restaurant_inspections
+SET dba = INITCAP(dba),
+	street = INITCAP(street);
+
+-- 3.2 Using REGEXP_REPLACE() to replace substrings that match a POSIX regular expression
+-- with a new substring
+
+-- View
+
+SELECT
+REGEXP_REPLACE(dba, '''S ?', '''s ', 'g')
+FROM restaurant_inspections;
+
+-- Update
+
+UPDATE restaurant_inspections
+SET dba = REGEXP_REPLACE(dba, '''S ?', '''s ', 'g');
+
+-- 3.3 Using RTRIM() to remove extra spaces
+
+-- View
+
+SELECT RTRIM(dba, ' ')
+FROM restaurant_inspection
+WHERE dba IS NOT NULL
+ORDER BY dba DESC;
+
+-- Update
+
+UPDATE restaurant_inspection
+SET dba = RTRIM(dba, ' ');
+
+-- 3.4 Using TRIM and REGEXP_REPLACE to remove extra spaces in the street column
+
+-- View
+
+SELECT TRIM(REGEXP_REPLACE(street, '\s+', ' ', 'g')) AS no_space
+FROM restaurant_inspections;
+
+-- Update
+
+UPDATE restaurant_inspections
+SET street = TRIM(REGEXP_REPLACE(street, '\s+', ' ', 'g'));
+
+--------------------------------------------------------------------------------------
+
+-- 4. Removing Duplicate Rows Using CTEs, temp tables, and ROW_NUMBER()
+
+-- Checking how the number of duplicate values change when adding different columns
+
+-- Number of duplicates when using the camis column: 24,365
+
+SELECT COUNT(*) AS number_duplicates
+FROM(
+	SELECT camis, COUNT(*)
+	FROM restaurant_inspection
+	GROUP BY camis
+	HAVING COUNT(*) > 1
+) AS number_duplicated_values;
+
+-- Number of duplicates when adding the dba and boro columns: 24,365
+
+SELECT COUNT(*) AS number_duplicates
+FROM(	
+	SELECT camis, dba, boro,  COUNT(*)
+	FROM restaurant_inspections
+	GROUP BY camis, dba, boro
+	HAVING COUNT(*) > 1
+) AS number_duplicated_values;
+
+-- Number of duplicates when adding the inspection_date column: 90,836
+
+SELECT COUNT(*) AS number_duplicates
+FROM(	
+	SELECT camis, dba, boro, inspection_date,  COUNT(*)
+	FROM restaurant_inspections
+	GROUP BY camis, dba, boro, inspection_date
+	HAVING COUNT(*) > 1
+) AS number_duplicated_values;
+
+-- Number of duplicates when adding the violation_code column: 18,706
+
+SELECT COUNT(*) AS number_duplicates
+FROM(	
+	SELECT camis, dba, boro, inspection_date,  COUNT(*)
+	FROM restaurant_inspections
+	GROUP BY camis, dba, boro, inspection_date
+	HAVING COUNT(*) > 1
+) AS number_duplicated_values;
+
+-- View only the duplicates
+
+WITH cte_duplicates AS (
+	SELECT camis, dba, boro, inspection_date, violation_code, 
+		ROW_NUMBER() OVER(
+			PARTITION BY camis, dba, boro, inspection_date, violation_code		
+			) - 1 AS duplicate
+	FROM restaurant_inspections
+)
+SELECT * 
+FROM cte_duplicates
+WHERE duplicate > 0;
+
+-- Creating temp table with only original values
+
+WITH cte_duplicates AS (
+	SELECT *, 
+		ROW_NUMBER() OVER(
+			PARTITION BY camis, dba, boro, inspection_date, violation_code
+			) - 1 AS duplicate
+	FROM restaurant_inspection
+)
+SELECT * INTO temp_table
+FROM cte_duplicates
+WHERE duplicate = 0;
+
+-- removing the duplicate column from the temp table
+
+ALTER TABLE temp_table
+DROP COLUMN duplicate;
+
+-- Deleting all rows from restaurant_inspections table
+
+DELETE
+FROM restaurant_inspections;
+
+-- Inserting temp_table values in restaurant_inspection table
+
+INSERT INTO restaurant_inspections
+SELECT *
+FROM temp_table;
+
+--------------------------------------------------------------------------------------
+
+-- 5. Finding Invalid Values In Columns
+
+SELECT
+	camis,
+	dba,
+	inspection_date,
+	score
+FROM restaurant_inspections
+WHERE score NOT SIMILAR TO '\d+';
+
+--------------------------------------------------------------------------------------
+
+-- 6. Fixing Mislabeled Scores
+
+UPDATE restaurant_inspections
+SET grade = CASE WHEN score BETWEEN 0 AND 13 THEN 'A' ELSE grade END;
+
+UPDATE restaurant_inspections
+SET grade = CASE WHEN score BETWEEN 14 AND 27 THEN 'B' ELSE grade END;
+
+
+UPDATE restaurant_inspections
+SET grade = CASE WHEN score >= 28 AND grade <> 'N' OR grade <> 'Z' 
+								  OR grade <> 'G'  OR grade <> 'P' 
+								  THEN 'C' ELSE grade END;
+
+--------------------------------------------------------------------------------------
+
+-- 7. Changing Columns to the Right Data Types
+
+ALTER TABLE restaurant_inspections
+ALTER COLUMN inspection_date TYPE DATE
+USING inspection_date::DATE;
+
+ALTER TABLE restaurant_inspections
+ALTER COLUMN score TYPE NUMERIC
+USING score::NUMERIC;
+
+ALTER TABLE restaurant_inspections
+ALTER COLUMN grade_date TYPE DATE
+USING grade_date::DATE;
+
+ALTER TABLE restaurant_inspections
+ALTER COLUMN record_date TYPE DATE
+USING record_date::DATE;
+
+--------------------------------------------------------------------------------------
+
+-- 8. Populating Missing Names With JOINs
+
+SELECT a.camis, a.dba, b.camis, b.dba
+FROM restaurant_inspections a
+JOIN restaurant_inspections b
+	ON a.camis = b.camis 
+	AND a.ctid <> b.ctid
+WHERE a.dba IS NULL
+
+-- No null values that we can match
+
+--------------------------------------------------------------------------------------
+
+-- 9. Creating Pivot Tables
+
+SELECT 
+	inspection_type,
+	COUNT(grade) FILTER (WHERE grade = 'A') AS "A",
+	COUNT(grade) FILTER (WHERE grade = 'B') AS "B",
+	COUNT(grade) FILTER (WHERE grade = 'C') AS "C",
+	COUNT(grade) FILTER (WHERE grade = 'N') AS "N",
+	COUNT(grade) FILTER (WHERE grade = 'P') AS "P",
+	COUNT(grade) FILTER (WHERE grade = 'Z') AS "Z"
+FROM restaurant_inspections
+WHERE grade IS NOT NULL
+GROUP BY inspection_type;
+
+--------------------------------------------------------------------------------------
+
+-- 10. Tableau Visualization
+-- For visualization, visit https://public.tableau.com/app/profile/christian5120/viz/NYCRestaurantInspections_16474031799460/NYCRestaurantInspections
